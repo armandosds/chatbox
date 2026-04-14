@@ -73,8 +73,11 @@ export function settings(): Settings {
     showModelName: true,
     showMessageTimestamp: false,
     showFirstTokenLatency: false,
+    showAvatar: true,
+    // messageLayout: 'left' as const, // 不设置默认值，这样可以通过判断这个值是否为空来判断是否通过了新功能引导
     userAvatarKey: '',
     defaultAssistantAvatarKey: '',
+    backgroundImageKey: '',
     theme: Theme.System,
     language: 'en',
     fontSize: 14,
@@ -122,6 +125,7 @@ export function settings(): Settings {
       webSearch: {
         provider: 'build-in',
         tavilyApiKey: '',
+        bochaApiKey: '',
       },
       knowledgeBase: {
         models: {
@@ -137,6 +141,10 @@ export function settings(): Settings {
     mcp: {
       servers: [],
       enabledBuiltinServers: [],
+    },
+    skills: {
+      enabledSkillNames: [],
+      translationEnabled: true,
     },
   }
 }

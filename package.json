@@ -4,12 +4,13 @@
   "version": "0.0.1",
   "engines": {
     "node": ">=20.0.0 <23.0.0",
-    "pnpm": ">=10.0.0"
+    "pnpm": ">=10.17.0"
   },
   "private": true,
   "description": "A desktop client for multiple cutting-edge AI models",
   "main": "out/main/main.js",
   "scripts": {
+    "generate:model-snapshot": "pnpm exec tsx scripts/generate-model-snapshot.ts",
     "build": "electron-vite build",
     "build:main": "electron-vite build",
     "build:preload": "electron-vite build",
@@ -68,6 +69,7 @@
     "email": "tohuangbin@gmail.com"
   },
   "devDependencies": {
+    "@ai-sdk/amazon-bedrock": "^4.0.83",
     "@ai-sdk/anthropic": "^3.0.6",
     "@ai-sdk/azure": "^3.0.4",
     "@ai-sdk/deepseek": "^2.0.3",
@@ -86,6 +88,7 @@
     "@capacitor-community/sqlite": "^7.0.2",
     "@capacitor/android": "^7.0.0",
     "@capacitor/app": "^7.0.0",
+    "@capacitor/app-launcher": "^7.0.4",
     "@capacitor/assets": "^3.0.5",
     "@capacitor/browser": "^7.0.2",
     "@capacitor/cli": "^7.0.0",
@@ -213,7 +216,7 @@
     "lucide-react": "^0.419.0",
     "mark.js": "^8.11.1",
     "material-ui-popup-state": "^5.0.4",
-    "mermaid": "^11.4.0",
+    "mermaid": "^11.13.0",
     "mini-css-extract-plugin": "^2.7.6",
     "msw": "^2.10.5",
     "node-loader": "^2.0.0",
@@ -344,5 +347,5 @@
       "mdast-util-gfm-autolink-literal@2.0.1": "patches/mdast-util-gfm-autolink-literal@2.0.1.patch"
     }
   },
-  "packageManager": "pnpm@10.15.1+sha512.34e538c329b5553014ca8e8f4535997f96180a1d0f614339357449935350d924e22f8614682191264ec33d1462ac21561aff97f6bb18065351c162c7e8f6de67"
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
 }

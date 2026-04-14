@@ -22,7 +22,13 @@ import {
   type Session,
   type SessionSettings,
 } from '@shared/types'
-import { IconInfoCircle, IconTrash } from '@tabler/icons-react'
+import {
+  type GoogleThinkingLevel,
+  getDefaultGoogleThinkingLevel,
+  getGoogleThinkingMode,
+  getSupportedGoogleThinkingLevels,
+} from '@shared/utils/google-thinking'
+import { IconInfoCircle, IconTrash, IconUpload } from '@tabler/icons-react'
 import { pick } from 'lodash'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -31,7 +37,7 @@ import { AdaptiveModal } from '@/components/common/AdaptiveModal'
 import LazyNumberInput from '@/components/common/LazyNumberInput'
 import MaxContextMessageCountSlider from '@/components/common/MaxContextMessageCountSlider'
 import SliderWithInput from '@/components/common/SliderWithInput'
-import { handleImageInputAndSave } from '@/components/Image'
+import { handleImageInputAndSave, ImageInStorage } from '@/components/Image'
 import ImageStyleSelect from '@/components/ImageStyleSelect'
 import { ScalableIcon } from '@/components/common/ScalableIcon'
 import SegmentedControl from '@/components/common/SegmentedControl'
@@ -41,6 +47,7 @@ import { StorageKeyGenerator } from '@/storage/StoreStorage'
 import { updateSession } from '@/stores/chatStore'
 import { getSessionMeta, mergeSettings } from '@/stores/sessionHelpers'
 import { settingsStore, useSettingsStore } from '@/stores/settingsStore'
+import { add as addToast } from '@/stores/toastActions'
 import { getMessageText } from '../../shared/utils/message'
 
 const SessionSettingsModal = NiceModal.create(
@@ -202,9 +209,10 @@ const SessionSettingsModal = NiceModal.create(
               )}
             </FileButton>
 
-            <Input.Wrapper label={t('name')}>
+            <Stack gap="xs">
+              <Text fw={700}>{t('Name')}</Text>
               <Input
-                placeholder={t('name')}
+                placeholder={t('Name')}
                 autoFocus={!isSmallScreen}
                 value={editingData.name}
                 onChange={(e) => setEditingData({ ...editingData, name: e.target.value })}
@@ -212,7 +220,7 @@ const SessionSettingsModal = NiceModal.create(
                   input: '!text-chatbox-tint-primary',
                 }}
               />
-            </Input.Wrapper>
+            </Stack>
 
             <Textarea
               label={t('Instruction (System Prompt)')}
@@ -230,21 +238,15 @@ const SessionSettingsModal = NiceModal.create(
               }}
             />
 
-            <Stack className=" border border-solid border-chatbox-border-primary rounded-md">
-              <Flex
-                align="center"
-                justify="space-between"
-                px="md"
-                py="sm"
-                className="border-0 border-b border-solid border-chatbox-border-primary"
-              >
+            <Stack gap="xs">
+              <Flex align="center" justify="space-between">
                 <Text fw={700}>{t('Specific model settings')}</Text>
-                <Button size="compact-sm" color="chatbox-secondary" variant="light" onClick={onReset}>
+                <Button size="compact-sm" color="chatbox-brand" variant="transparent" onClick={onReset} fw={600}>
                   {t('Reset')}
                 </Button>
               </Flex>
 
-              <Box px="md" py="sm">
+              <Box p="sm" className="border border-solid border-chatbox-border-primary rounded-md">
                 {isChatSession(session) && (
                   <ChatConfig
                     settings={editingData.settings}
@@ -268,12 +270,90 @@ const SessionSettingsModal = NiceModal.create(
                 {isPictureSession(session) && <PictureConfig dataEdit={editingData} setDataEdit={setEditingData} />}
               </Box>
             </Stack>
+
+            <Stack gap="xs">
+              <Text fw={600}>{t('Background Settings')}</Text>
+              <Flex
+                align="center"
+                gap="sm"
+                wrap="wrap"
+                className="p-sm border border-solid border-chatbox-border-primary rounded-md"
+              >
+                <Flex align="center" gap="xxs">
+                  <Text>{t('Background Image')}</Text>
+                  <Tooltip
+                    label={t('Support jpg or png file smaller than 5MB. Overrides global background when set.')}
+                    withArrow
+                    offset={4}
+                  >
+                    <ScalableIcon icon={IconInfoCircle} size={20} className="text-chatbox-tint-tertiary" />
+                  </Tooltip>
+                </Flex>
+
+                <div className="flex-1" />
+
+                <FileButton
+                  accept="image/png,image/jpeg"
+                  onChange={(file) => {
+                    if (file) {
+                      if (file.size > 5 * 1024 * 1024) {
+                        addToast(t('Support jpg or png file smaller than 5MB'))
+                        return
+                      }
+                      const key = StorageKeyGenerator.picture(`session-bg:${session.id}`)
+                      handleImageInputAndSave(
+                        file,
+                        key,
+                        () =>
+                          setEditingData({ ...editingData, backgroundImage: { type: 'storage-key', storageKey: key } }),
+                        (k, v) => storage.setBlob(k, v)
+                      )
+                    }
+                  }}
+                >
+                  {(props) => (
+                    <Button {...props} variant="default" size="compact-sm">
+                      <ScalableIcon icon={IconUpload} size={12} className="mr-xs" />
+                      {t('Upload')}
+                    </Button>
+                  )}
+                </FileButton>
+
+                {editingData.backgroundImage?.type === 'storage-key' ? (
+                  <Box w={48} h={48} className="relative overflow-hidden rounded bg-chatbox-tertiary/20 flex-shrink-0">
+                    <ImageInStorage
+                      storageKey={editingData.backgroundImage.storageKey}
+                      className="object-cover w-full h-full"
+                    />
+
+                    <ActionIcon
+                      color="chatbox-error"
+                      size={20}
+                      radius={10}
+                      bottom={3}
+                      right={3}
+                      className="absolute"
+                      onClick={() => {
+                        if (editingData.backgroundImage) {
+                          if (editingData.backgroundImage.type === 'storage-key') {
+                            storage.removeItem(editingData.backgroundImage.storageKey)
+                          }
+                          setEditingData({ ...editingData, backgroundImage: undefined })
+                        }
+                      }}
+                    >
+                      <ScalableIcon icon={IconTrash} size={16} />
+                    </ActionIcon>
+                  </Box>
+                ) : null}
+              </Flex>
+            </Stack>
           </Stack>
         </div>
 
         <AdaptiveModal.Actions>
           <AdaptiveModal.CloseButton onClick={onCancel} />
-          <Button onClick={onSave}>{t('save')}</Button>
+          <Button onClick={onSave}>{t('Save')}</Button>
         </AdaptiveModal.Actions>
       </AdaptiveModal>
     )
@@ -418,6 +498,70 @@ function ThinkingBudgetConfig({
   )
 }
 
+interface ThinkingLevelConfigProps {
+  currentLevel: GoogleThinkingLevel
+  supportedLevels: GoogleThinkingLevel[]
+  onLevelChange: (thinkingLevel: GoogleThinkingLevel) => void
+  tooltipText: string
+}
+
+function ThinkingLevelConfig({ currentLevel, supportedLevels, onLevelChange, tooltipText }: ThinkingLevelConfigProps) {
+  const { t } = useTranslation()
+
+  const thinkingLevelOptions = useMemo(
+    () =>
+      supportedLevels.map((level) => ({
+        label:
+          level === 'minimal'
+            ? t('Minimal')
+            : level === 'low'
+              ? t('Low')
+              : level === 'medium'
+                ? t('Medium')
+                : t('High'),
+        value: level,
+      })),
+    [supportedLevels, t]
+  )
+
+  const handleThinkingLevelChange = useCallback(
+    (value: string) => {
+      onLevelChange(value as GoogleThinkingLevel)
+    },
+    [onLevelChange]
+  )
+
+  return (
+    <Stack gap="md" style={{ minWidth: 0 }}>
+      <Flex align="center" gap="xs">
+        <Text size="sm" fw="600">
+          {t('Thinking Level')}
+        </Text>
+        <Tooltip
+          label={tooltipText}
+          withArrow={true}
+          maw={320}
+          className="!whitespace-normal"
+          zIndex={3000}
+          events={{ hover: true, focus: true, touch: true }}
+        >
+          <ScalableIcon icon={IconInfoCircle} size={20} className="text-chatbox-tint-tertiary" />
+        </Tooltip>
+      </Flex>
+
+      <div style={{ minWidth: 0, overflowX: 'auto' }}>
+        <SegmentedControl
+          key={`thinking-level-control:${supportedLevels.join(',')}`}
+          value={currentLevel}
+          onChange={handleThinkingLevelChange}
+          data={thinkingLevelOptions}
+          fullWidth={false}
+        />
+      </div>
+    </Stack>
+  )
+}
+
 function ClaudeProviderConfig({
   settings,
   onSettingsChange,
@@ -528,9 +672,12 @@ function GoogleProviderConfig({
   onSettingsChange: (data: Session['settings']) => void
 }) {
   const { t } = useTranslation()
+  const modelId = settings?.modelId || ''
   const providerOptions = settings?.providerOptions?.google
+  const thinkingMode = getGoogleThinkingMode(modelId)
+  const supportedLevels = useMemo(() => getSupportedGoogleThinkingLevels(modelId), [modelId])
 
-  const handleConfigChange = (config: { budgetTokens: number; enabled: boolean }) => {
+  const handleBudgetConfigChange = (config: { budgetTokens: number; enabled: boolean }) => {
     onSettingsChange({
       providerOptions: {
         google: { thinkingConfig: { thinkingBudget: config.budgetTokens, includeThoughts: config.enabled } },
@@ -538,12 +685,52 @@ function GoogleProviderConfig({
     })
   }
 
+  const handleLevelChange = useCallback(
+    (thinkingLevel: GoogleThinkingLevel) => {
+      onSettingsChange({
+        providerOptions: {
+          google: { thinkingConfig: { thinkingLevel, includeThoughts: true } },
+        },
+      })
+    },
+    [onSettingsChange]
+  )
+
+  const currentThinkingLevel = useMemo(() => {
+    const thinkingLevel = providerOptions?.thinkingConfig?.thinkingLevel
+
+    if (supportedLevels.length === 0) {
+      return undefined
+    }
+
+    if (thinkingLevel && supportedLevels.includes(thinkingLevel)) {
+      return thinkingLevel
+    }
+
+    return getDefaultGoogleThinkingLevel(modelId)
+  }, [modelId, providerOptions?.thinkingConfig?.thinkingLevel, supportedLevels])
+
+  if (thinkingMode === 'level' && currentThinkingLevel) {
+    return (
+      <ThinkingLevelConfig
+        currentLevel={currentThinkingLevel}
+        supportedLevels={supportedLevels}
+        onLevelChange={handleLevelChange}
+        tooltipText={t('Thinking Level only works for Gemini 3 models')}
+      />
+    )
+  }
+
+  if (thinkingMode !== 'budget') {
+    return null
+  }
+
   return (
     <ThinkingBudgetConfig
       currentBudgetTokens={providerOptions?.thinkingConfig?.thinkingBudget || 0}
       isEnabled={(providerOptions?.thinkingConfig?.thinkingBudget || 0) > 0}
-      onConfigChange={handleConfigChange}
-      tooltipText={t('Thinking Budget only works for 2.0 or later models')}
+      onConfigChange={handleBudgetConfigChange}
+      tooltipText={t('Thinking Budget only works for Gemini 2.5 models')}
       minValue={0}
       maxValue={10000}
     />
@@ -655,17 +842,15 @@ export function ChatConfig({
         </Stack>
       )}
 
-      <Stack>
-        {settings?.provider === ModelProviderEnum.Claude && (
-          <ClaudeProviderConfig settings={settings} onSettingsChange={onSettingsChange} />
-        )}
-        {settings?.provider === ModelProviderEnum.OpenAI && (
-          <OpenAIProviderConfig settings={settings} onSettingsChange={onSettingsChange} />
-        )}
-        {settings?.provider === ModelProviderEnum.Gemini && (
-          <GoogleProviderConfig settings={settings} onSettingsChange={onSettingsChange} />
-        )}
-      </Stack>
+      {settings?.provider === ModelProviderEnum.Claude && (
+        <ClaudeProviderConfig settings={settings} onSettingsChange={onSettingsChange} />
+      )}
+      {settings?.provider === ModelProviderEnum.OpenAI && (
+        <OpenAIProviderConfig settings={settings} onSettingsChange={onSettingsChange} />
+      )}
+      {settings?.provider === ModelProviderEnum.Gemini && (
+        <GoogleProviderConfig settings={settings} onSettingsChange={onSettingsChange} />
+      )}
     </Stack>
   )
 }

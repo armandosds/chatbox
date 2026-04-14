@@ -1,10 +1,9 @@
+import { ofetch } from 'ofetch'
+import { z } from 'zod'
 import { getLogger } from '@/lib/utils'
 import platform from '@/platform'
 import { authInfoStore } from '@/stores/authInfoStore'
-import { USE_BETA_API, USE_BETA_CHATBOX, USE_LOCAL_API, USE_LOCAL_CHATBOX } from '@/variables'
-import { ofetch } from 'ofetch'
-import { z } from 'zod'
-import * as cache from 'src/shared/utils/cache'
+import { CHATBOX_BUILD_CHANNEL, USE_BETA_API, USE_BETA_CHATBOX, USE_LOCAL_API, USE_LOCAL_CHATBOX } from '@/variables'
 import * as chatboxaiAPI from '../../shared/request/chatboxai_pool'
 import { createAfetch, createAuthenticatedAfetch, uploadFile } from '../../shared/request/request'
 import {
@@ -94,6 +93,8 @@ async function getAuthenticatedAfetch() {
 function getAPIOrigin() {
   if (USE_LOCAL_API) {
     return 'http://localhost:8002'
+  } else if (USE_BETA_API) {
+    return 'https://api-beta.chatboxai.app'
   } else {
     return chatboxaiAPI.getChatboxAPIOrigin()
   }
@@ -109,10 +110,15 @@ export function getChatboxOrigin() {
   }
 }
 
+export function buildChatboxUrl(path: string) {
+  return new URL(path, getChatboxOrigin()).toString()
+}
+
 const getChatboxHeaders = async () => {
   return {
     'CHATBOX-PLATFORM': await platform.getPlatform(),
     'CHATBOX-PLATFORM-TYPE': platform.type,
+    'CHATBOX-CHANNEL': CHATBOX_BUILD_CHANNEL,
     'CHATBOX-VERSION': await platform.getVersion(),
     'CHATBOX-OS': getOS(),
   }
@@ -159,16 +165,49 @@ export async function checkNeedUpdate(version: string, os: string, config: Confi
 //     return res['data'] || []
 // }
 
-export async function listCopilots(lang: string) {
+export async function listCopilotTags(lang: string) {
   type Response = {
-    data: CopilotDetail[]
+    data: string[]
   }
-  const res = await ofetch<Response>(`${getAPIOrigin()}/api/copilots/list`, {
-    method: 'POST',
+  const res = await ofetch<Response>(`${getAPIOrigin()}/api/system_copilots/tags/${lang}`, {
+    method: 'GET',
     retry: 3,
-    body: { lang },
   })
   return res.data
+}
+
+export async function listCopilotsByCursor(
+  lang: string,
+  filters?: {
+    limit?: number
+    cursor?: string
+    tag?: string
+    search?: string
+  }
+) {
+  type Response = {
+    data: CopilotDetail[]
+    next_cursor: string | null
+  }
+  const res = await ofetch<Response>(`${getAPIOrigin()}/api/system_copilots/list`, {
+    method: 'POST',
+    retry: 3,
+    body: { lang, ...filters },
+  })
+  return res
+}
+
+export async function recordCopilotUsage(params: {
+  id: string
+  action: 'create_session' | 'create_thread' | 'create_message' | 'use_copilot'
+}) {
+  await ofetch(`${getAPIOrigin()}/api/system_copilots/record_usage`, {
+    method: 'POST',
+    body: {
+      ...params,
+      device_id: (await platform.getConfig()).uuid,
+    },
+  })
 }
 
 export async function recordCopilotShare(detail: CopilotDetail) {
@@ -272,7 +311,7 @@ export async function getLicenseDetailRealtime(params: { licenseKey: string }): 
       },
     })
     return { data: res.data || null, error: res.error }
-  } catch (e: any) {
+  } catch (e: unknown) {
     // 如果捕获到了错误响应体，返回它
     if (capturedError) {
       return { data: null, error: capturedError }
@@ -358,7 +397,11 @@ export async function uploadAndCreateUserFile(licenseKey: string, file: File) {
   return storageKey
 }
 
-export async function parseUserLinkPro(params: { licenseKey: string; url: string }) {
+export async function parseUserLinkPro(params: {
+  licenseKey: string
+  url: string
+  abortSignal?: AbortSignal
+}) {
   type Response = {
     data: {
       uuid: string
@@ -366,20 +409,23 @@ export async function parseUserLinkPro(params: { licenseKey: string; url: string
       content: string
     }
   }
+  const { licenseKey, url, abortSignal } = params
   const afetch = await getAfetch()
   const res = await afetch(
     `${getAPIOrigin()}/api/links/parse`,
     {
       method: 'POST',
       headers: {
-        Authorization: params.licenseKey,
+        Authorization: licenseKey,
         'Content-Type': 'application/json',
         ...(await getChatboxHeaders()),
       },
       body: JSON.stringify({
-        ...params,
+        licenseKey,
+        url,
         returnContent: true,
       }),
+      signal: abortSignal,
     },
     {
       parseChatboxRemoteError: true,
@@ -387,7 +433,7 @@ export async function parseUserLinkPro(params: { licenseKey: string; url: string
     }
   )
   const json: Response = await res.json()
-  const storageKey = `parseUrl-${params.url}_${json['data']['uuid']}.txt`
+  const storageKey = `parseUrl-${url}_${json['data']['uuid']}.txt`
   if (json['data']['content']) {
     await platform.setStoreBlob(storageKey, json['data']['content'])
   }
@@ -408,6 +454,7 @@ export async function parseUserLinkFree(params: { url: string }) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(await getChatboxHeaders()),
     },
     body: JSON.stringify(params),
   })
@@ -626,7 +673,6 @@ export async function requestLoginTicketId() {
   const appVersion = await platform.getVersion()
   const deviceName = await platform.getDeviceName()
 
-  console.log('getChatboxOrigin()', getChatboxOrigin())
   const res = await afetch(
     `${getChatboxOrigin()}/api/auth/request_login_ticket`,
     {
@@ -648,6 +694,94 @@ export async function requestLoginTicketId() {
   )
   const json: Response = await res.json()
   return json.data.ticket_id
+}
+
+export async function sendEmailLoginCode(params: { email: string; lang?: string }) {
+  type Response = {
+    data: {
+      result: string
+    }
+  }
+  const afetch = await getAfetch()
+  const res = await afetch(
+    `${getChatboxOrigin()}/api/auth/send_email_login_code`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getChatboxHeaders()),
+      },
+      body: JSON.stringify({
+        email: params.email,
+        lang: params.lang,
+      }),
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json: Response = await res.json()
+  return json.data.result
+}
+
+export async function loginOrSignupWithEmailCode(params: { email: string; code: string }) {
+  type Response = {
+    data: {
+      access_token: string
+      refresh_token: string
+    }
+    success: boolean
+  }
+  const afetch = await getAfetch()
+  const res = await afetch(
+    `${getChatboxOrigin()}/api/auth/login_or_signup_with_email_code`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getChatboxHeaders()),
+      },
+      body: JSON.stringify({
+        email: params.email,
+        code: params.code,
+      }),
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 1,
+    }
+  )
+  const json: Response = await res.json()
+  return {
+    accessToken: json.data.access_token,
+    refreshToken: json.data.refresh_token,
+  }
+}
+
+export async function getWebAuthToken(): Promise<string> {
+  type Response = {
+    data: {
+      web_auth_token: string
+    }
+    success: boolean
+  }
+  const afetch = await getAuthenticatedAfetch()
+  const res = await afetch(
+    `${getChatboxOrigin()}/api/auth/web_auth_token/generate`,
+    {
+      method: 'POST',
+      headers: {
+        ...(await getChatboxHeaders()),
+      },
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json: Response = await res.json()
+  return json.data.web_auth_token
 }
 
 export async function checkLoginStatus(ticketId: string) {
@@ -806,4 +940,112 @@ export async function listLicensesByUser(): Promise<UserLicense[]> {
   )
   const json: Response = await res.json()
   return json.data
+}
+
+// ========== Image Generation API ==========
+
+const IMAGE_GEN_API_ORIGIN = getAPIOrigin()
+
+export interface ImageCompletionRequest {
+  model: string
+  prompt: string
+  response_format: 'b64_json'
+  style?: string
+  aspect_ratio?: string
+  quantity?: number
+  images?: Array<{ image_url: string }>
+}
+
+// Zod schemas for runtime validation
+const ImageGenerationItemSchema = z.object({
+  uuid: z.string(),
+  status: z.enum(['pending', 'processing', 'completed', 'failed']),
+  created_at: z.string(),
+  image_url: z.string().optional(),
+  generated_at: z.string().optional(),
+})
+
+const ImageGenerationTaskResponseSchema = z.object({
+  items: z.array(ImageGenerationItemSchema),
+  is_finished: z.boolean(),
+  task_id: z.string(),
+})
+
+export type ImageGenerationItem = z.infer<typeof ImageGenerationItemSchema>
+export type ImageGenerationTaskResponse = z.infer<typeof ImageGenerationTaskResponseSchema>
+
+export async function submitImageGeneration(
+  params: ImageCompletionRequest,
+  licenseKey: string
+): Promise<ImageGenerationTaskResponse> {
+  const afetch = await getAfetch()
+  const res = await afetch(
+    `${IMAGE_GEN_API_ORIGIN}/api/images/async_generations`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${licenseKey}`,
+        'Content-Type': 'application/json',
+        ...(await getChatboxHeaders()),
+      },
+      body: JSON.stringify(params),
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json = await res.json()
+  return ImageGenerationTaskResponseSchema.parse(json)
+}
+
+export async function pollImageTask(
+  taskId: string,
+  licenseKey: string,
+  signal?: AbortSignal
+): Promise<ImageGenerationTaskResponse> {
+  const afetch = await getAfetch()
+  const res = await afetch(
+    `${IMAGE_GEN_API_ORIGIN}/api/images/async_generations/${taskId}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${licenseKey}`,
+        ...(await getChatboxHeaders()),
+      },
+      signal,
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json = await res.json()
+  return ImageGenerationTaskResponseSchema.parse(json)
+}
+
+const POLL_INTERVAL_MS = 2000
+
+export async function pollTaskUntilComplete(
+  taskId: string,
+  licenseKey: string,
+  options?: {
+    signal?: AbortSignal
+    onPoll?: (response: ImageGenerationTaskResponse) => void
+  }
+): Promise<ImageGenerationTaskResponse> {
+  while (true) {
+    if (options?.signal?.aborted) {
+      throw new DOMException('Polling aborted', 'AbortError')
+    }
+
+    const result = await pollImageTask(taskId, licenseKey, options?.signal)
+    options?.onPoll?.(result)
+
+    if (result.is_finished) {
+      return result
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+  }
 }

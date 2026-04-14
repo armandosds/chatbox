@@ -2,14 +2,16 @@ import NiceModal from '@ebay/nice-modal-react'
 import { Button } from '@mantine/core'
 import type { Message, ModelProvider } from '@shared/types'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { ForwardedRef, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from 'zustand'
 import MessageList, { type MessageListRef } from '@/components/chat/MessageList'
 import { ErrorBoundary } from '@/components/common/ErrorBoundary'
 import InputBox from '@/components/InputBox/InputBox'
 import Header from '@/components/layout/Header'
+import Page from '@/components/layout/Page'
 import ThreadHistoryDrawer from '@/components/session/ThreadHistoryDrawer'
+import * as remote from '@/packages/remote'
 import { updateSession as updateSessionStore, useSession } from '@/stores/chatStore'
 import { lastUsedModelStore } from '@/stores/lastUsedModelStore'
 import * as scrollActions from '@/stores/scrollActions'
@@ -85,6 +87,11 @@ function RouteComponent() {
       return false
     }
     void startNewThread(currentSession.id)
+    if (currentSession.copilotId) {
+      void remote
+        .recordCopilotUsage({ id: currentSession.copilotId, action: 'create_thread' })
+        .catch((error) => console.warn('[recordCopilotUsage] failed', error))
+    }
     return true
   }, [currentSession])
 
@@ -106,10 +113,19 @@ function RouteComponent() {
       needGenerating?: boolean
       onUserMessageReady?: () => void
     }) => {
+      messageListRef.current?.setIsNewMessage(true)
+
       if (!currentSession) {
         return
       }
       messageListRef.current?.scrollToBottom('instant')
+
+      if (currentSession.copilotId) {
+        void remote
+          .recordCopilotUsage({ id: currentSession.copilotId, action: 'create_message' })
+          .catch((error) => console.warn('[recordCopilotUsage] failed', error))
+      }
+
       await submitNewUserMessage(currentSession.id, {
         newUserMsg: constructedMessage,
         needGenerating,
@@ -177,12 +193,14 @@ function RouteComponent() {
     </div>
   ) : (
     !isFetching && (
-      <div className="flex flex-1 flex-col items-center justify-center min-h-[60vh]">
-        <div className="text-2xl font-semibold text-gray-700 mb-4">{t('Conversation not found')}</div>
-        <Button variant="outline" onClick={goHome}>
-          {t('Back to HomePage')}
-        </Button>
-      </div>
+      <Page title="">
+        <div className="flex flex-1 flex-col items-center justify-center min-h-[60vh]">
+          <div className="text-2xl font-semibold text-gray-700 mb-4">{t('Conversation not found')}</div>
+          <Button variant="outline" onClick={goHome}>
+            {t('Back to HomePage')}
+          </Button>
+        </div>
+      </Page>
     )
   )
 }

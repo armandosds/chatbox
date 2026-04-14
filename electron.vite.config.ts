@@ -1,8 +1,8 @@
+import path, { resolve } from 'node:path'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
-import path, { resolve } from 'path'
 import { visualizer } from 'rollup-plugin-visualizer'
 import type { Plugin } from 'vite'
 import packageJson from './release/app/package.json'
@@ -21,6 +21,55 @@ export function injectBaseTag(): Plugin {
           injectTo: 'head-prepend', // Inject at the beginning of <head>
         },
       ]
+    },
+  }
+}
+
+/**
+ * Vite plugin to inject window.chatbox_release_date for web builds
+ */
+export function injectReleaseDate(): Plugin {
+  const releaseDate = new Date().toISOString().slice(0, 10)
+  return {
+    name: 'inject-release-date',
+    transformIndexHtml() {
+      return [
+        {
+          tag: 'script',
+          children: `window.chatbox_release_date="${releaseDate}";`,
+          injectTo: 'head-prepend',
+        },
+      ]
+    },
+  }
+}
+
+/**
+ * Vite plugin to replace Plausible data-domain for web builds
+ */
+export function replacePlausibleDomain(): Plugin {
+  return {
+    name: 'replace-plausible-domain',
+    transformIndexHtml(html) {
+      return html.replace('data-domain="app.chatboxai.app"', 'data-domain="web.chatboxai.app"')
+    },
+  }
+}
+
+/**
+ * Vite plugin to inject platform-appropriate viewport meta content.
+ * Desktop builds omit `height=device-height` and `viewport-fit=cover` which trigger
+ * Chromium's Virtual Keyboard API on macOS, causing an empty bottom margin on input focus.
+ * See: https://github.com/chatboxai/chatbox/issues/2023
+ */
+export function injectViewportContent(isDesktop: boolean): Plugin {
+  const content = isDesktop
+    ? 'width=device-width, initial-scale=1, user-scalable=no'
+    : 'height=device-height, width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover'
+  return {
+    name: 'inject-viewport-content',
+    transformIndexHtml(html) {
+      return html.replace('%VIEWPORT_CONTENT%', content)
     },
   }
 }
@@ -55,6 +104,8 @@ if (inferredDist) {
 export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production'
   const isWeb = process.env.CHATBOX_BUILD_PLATFORM === 'web'
+  const isMobile = process.env.CHATBOX_BUILD_TARGET === 'mobile_app'
+  const isDesktop = !isWeb && !isMobile
 
   return {
     main: {
@@ -103,6 +154,7 @@ export default defineConfig(({ mode }) => {
       resolve: {
         alias: {
           '@': path.resolve(__dirname, './src/renderer'),
+          '@shared': path.resolve(__dirname, './src/shared'),
           'src/shared': path.resolve(__dirname, './src/shared'),
         },
       },
@@ -111,8 +163,11 @@ export default defineConfig(({ mode }) => {
         'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
         'process.env.CHATBOX_BUILD_TARGET': JSON.stringify(process.env.CHATBOX_BUILD_TARGET || 'unknown'),
         'process.env.CHATBOX_BUILD_PLATFORM': JSON.stringify(process.env.CHATBOX_BUILD_PLATFORM || 'unknown'),
+        'process.env.CHATBOX_BUILD_CHANNEL': JSON.stringify(process.env.CHATBOX_BUILD_CHANNEL || 'unknown'),
         'process.env.USE_LOCAL_API': JSON.stringify(process.env.USE_LOCAL_API || ''),
         'process.env.USE_BETA_API': JSON.stringify(process.env.USE_BETA_API || ''),
+        'process.env.USE_LOCAL_CHATBOX': JSON.stringify(process.env.USE_LOCAL_CHATBOX || ''),
+        'process.env.USE_BETA_CHATBOX': JSON.stringify(process.env.USE_BETA_CHATBOX || ''),
       },
     },
     preload: {
@@ -134,6 +189,7 @@ export default defineConfig(({ mode }) => {
       resolve: {
         alias: {
           '@': path.resolve(__dirname, './src/renderer'),
+          '@shared': path.resolve(__dirname, './src/shared'),
           'src/shared': path.resolve(__dirname, './src/shared'),
         },
       },
@@ -154,7 +210,10 @@ export default defineConfig(({ mode }) => {
         }),
         react({}),
         dvhToVh(),
+        injectViewportContent(isDesktop),
         isWeb ? injectBaseTag() : undefined,
+        injectReleaseDate(),
+        isWeb ? replacePlausibleDomain() : undefined,
         visualizer({
           filename: 'release/app/dist/renderer/stats.html',
           open: false,
@@ -200,15 +259,22 @@ export default defineConfig(({ mode }) => {
             },
             // Optimize chunk splitting to reduce memory usage during build
             manualChunks(id) {
-              if (id.includes('node_modules')) {
+              const normalizedId = id.split(path.sep).join('/')
+              const isNodeModulePackage = (pkg: string) => normalizedId.includes(`/node_modules/${pkg}/`)
+
+              if (normalizedId.includes('/node_modules/')) {
                 // Split large vendor chunks
-                if (id.includes('@ai-sdk') || id.includes('ai/')) {
+                if (isNodeModulePackage('@ai-sdk') || isNodeModulePackage('ai')) {
                   return 'vendor-ai'
                 }
-                if (id.includes('@mantine') || id.includes('@tabler')) {
+                if (isNodeModulePackage('@mantine') || isNodeModulePackage('@tabler')) {
                   return 'vendor-ui'
                 }
-                if (id.includes('mermaid') || id.includes('d3')) {
+                if (
+                  isNodeModulePackage('mermaid') ||
+                  isNodeModulePackage('d3') ||
+                  /\/node_modules\/d3-[^/]+\//.test(normalizedId)
+                ) {
                   return 'vendor-charts'
                 }
               }
@@ -223,16 +289,18 @@ export default defineConfig(({ mode }) => {
         postcss: './postcss.config.cjs',
       },
       server: {
-        port: 1212,
-        strictPort: true,
+        port: Number(process.env.DEV_PORT) || 1212,
       },
       define: {
         'process.type': '"renderer"',
         'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
         'process.env.CHATBOX_BUILD_TARGET': JSON.stringify(process.env.CHATBOX_BUILD_TARGET || 'unknown'),
         'process.env.CHATBOX_BUILD_PLATFORM': JSON.stringify(process.env.CHATBOX_BUILD_PLATFORM || 'unknown'),
+        'process.env.CHATBOX_BUILD_CHANNEL': JSON.stringify(process.env.CHATBOX_BUILD_CHANNEL || 'unknown'),
         'process.env.USE_LOCAL_API': JSON.stringify(process.env.USE_LOCAL_API || ''),
         'process.env.USE_BETA_API': JSON.stringify(process.env.USE_BETA_API || ''),
+        'process.env.USE_LOCAL_CHATBOX': JSON.stringify(process.env.USE_LOCAL_CHATBOX || ''),
+        'process.env.USE_BETA_CHATBOX': JSON.stringify(process.env.USE_BETA_CHATBOX || ''),
       },
       optimizeDeps: {
         include: ['mermaid'],
